@@ -61,9 +61,23 @@
     - name: Add LXC containers to inventory (proxmox_pct_remote connection)
       ansible.builtin.add_host:
         name: "{{ item.key }}"
-        groups:
-          - lxc_containers
-          - all
+        groups: >-
+          {{
+            ['lxc_containers', 'all'] +
+            (
+              ['haproxy_group']
+              if 'loadbalancer' in (item.value.tags | default([]))
+              else []
+            ) +
+            (
+              ['cribl_edge']
+              if (
+                'edge' in (item.value.tags | default([])) and
+                'cribl' in (item.value.tags | default([]))
+              )
+              else []
+            )
+          }}
         ansible_pct_vmid: "{{ item.value.vmid }}"
         ansible_host: "{{ item.value.ip }}"
         ansible_connection: "{{ item.value.ansible_connection }}"
