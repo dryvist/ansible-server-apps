@@ -49,3 +49,6 @@ secrets.dec.yaml
 
 # Nix/direnv
 .direnv/
+
+# Local ai-workflows checkout (upstream reusable workflows repo, not a submodule)
+.ai-workflows/
