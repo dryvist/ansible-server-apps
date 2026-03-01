@@ -274,15 +274,15 @@ This project uses [Nix flakes](https://wiki.nixos.org/wiki/Flakes) + [direnv](ht
 ### Setup
 
 ```sh
-cd ansible-proxmox-apps/main    # or any worktree
-direnv allow                    # one-time per worktree
+cd ~/git/ansible-proxmox-apps/main    # or any worktree
+direnv allow                          # one-time per worktree
 ```
 
 ### Tools provided
 
 - `ansible`, `ansible-lint`, `molecule` — configuration management
 - `sops`, `age` — secrets management
-- `python3` with paramiko, pyyaml, jinja2 — Ansible dependencies
+- `python3` with paramiko, jsondiff, pyyaml, jinja2 — Ansible dependencies
 - `jq`, `yq`, `pre-commit` — utilities
 
 ## Contributing
