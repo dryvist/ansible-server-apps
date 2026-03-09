@@ -7,22 +7,34 @@
 
 # Configure application stacks based on Terraform infrastructure
 
-# Pre-requisite: Configure apt proxy on all LXC containers
-# This must run BEFORE any roles that use apt to install packages
-# Note: Only runs when apt_proxy tag is specified or when running full site.yml
+# =============================================================================
+# Phase 0: APT Cache Infrastructure
+# apt-cacher-ng must be deployed BEFORE any roles that install apt packages
+# =============================================================================
+
+- name: Deploy apt-cacher-ng caching proxy
+  hosts: apt_cacher_group
+  become: true
+  gather_facts: true
+  tags:
+    - apt_cacher_ng
+    - apt_proxy
+    - lxc
+  roles:
+    - role: apt_cacher_ng
+
 - name: Configure apt proxy on LXC containers
-  hosts: lxc_containers
+  hosts: lxc_containers:!apt_cacher_group
   become: true
   gather_facts: false
   tags:
     - apt_proxy
     - lxc
-
   vars:
-    # Derive apt-cacher IP from gateway (VMID 106)
-    apt_cacher_ip: "{{ lookup('env', 'PROXMOX_VE_GATEWAY') | regex_replace('\\.[0-9]+$', '.106') }}"
-    apt_cacher_port: 3142
-
+    apt_cacher_ip: "{{ hostvars['apt-cacher-ng']['container_ip'] }}"
+    apt_cacher_port: >-
+      {{ hostvars['localhost']['terraform_data']['constants']['service_ports']['apt_cacher_ng']
+      | default(3142) }}
   tasks:
     - name: Configure apt proxy
       ansible.builtin.copy:

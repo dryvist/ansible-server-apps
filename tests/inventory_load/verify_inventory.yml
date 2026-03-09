@@ -12,12 +12,14 @@
 #   - haproxy_group assigned for 'loadbalancer' tagged containers   (PR #36)
 #   - cribl_edge group assigned for 'cribl'+'edge' tagged containers (PR #36)
 #   - mssql_group assigned for 'database' tagged containers          (PR #72)
+#   - apt_cacher_group assigned for 'apt-cache' tagged containers
 #   - lxc_containers populated for all terraform containers
 #   - splunk_group / cribl_docker_group populated from their sections
 #
 # Note: hosts.yml pre-populates some groups (haproxy_group, cribl_edge,
 # lxc_containers) with static hosts. These tests verify that terraform
 # dynamic hosts are correctly added on top of any static entries.
+# Static apt_cacher host has been removed from hosts.yml (container never provisioned).
 
 - name: Load Terraform inventory
   import_playbook: ../../inventory/load_terraform.yml
@@ -65,7 +67,7 @@
           - "'haproxy' in groups['lxc_containers']"
           - "'cribl-edge-01' in groups['lxc_containers']"
           - "'mssql' in groups['lxc_containers']"
-          - "'apt-cacher' in groups['lxc_containers']"
+          - "'apt-cacher-ng' in groups['lxc_containers']"
         fail_msg: >-
           lxc_containers group is missing terraform hosts;
           current members: {{ groups['lxc_containers'] | default([]) | join(', ') }}
@@ -97,13 +99,6 @@
           mssql_group should contain 'mssql' (database tag);
           got {{ groups['mssql_group'] | default([]) }}
 
-    - name: Verify untagged container is NOT in special groups
-      ansible.builtin.assert:
-        that:
-          - "'apt-cacher' not in (groups['haproxy_group'] | default([]))"
-          - "'apt-cacher' not in (groups['mssql_group'] | default([]))"
-        fail_msg: "apt-cacher (no tags) should not appear in haproxy_group or mssql_group"
-
     - name: Verify splunk is in splunk_group
       ansible.builtin.assert:
         that:
@@ -122,6 +117,13 @@
           cribl_docker_group should contain 'docker-host';
           got {{ groups['cribl_docker_group'] | default([]) }}
 
+    - name: Assert apt-cacher-ng is in apt_cacher_group
+      ansible.builtin.assert:
+        that:
+          - "'apt_cacher_group' in groups"
+          - "'apt-cacher-ng' in groups['apt_cacher_group']"
+        fail_msg: "apt-cacher-ng should be in apt_cacher_group (tag: apt-cache)"
+
     - name: Display group membership summary
       ansible.builtin.debug:
         msg: |
@@ -132,3 +134,4 @@
           - mssql_group:        {{ groups['mssql_group'] | default([]) | join(', ') }}
           - splunk_group:       {{ groups['splunk_group'] | default([]) | join(', ') }}
           - cribl_docker_group: {{ groups['cribl_docker_group'] | default([]) | join(', ') }}
+          - apt_cacher_group:   {{ groups['apt_cacher_group'] | default([]) | join(', ') }}
