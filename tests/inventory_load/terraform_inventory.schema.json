@@ -158,7 +158,8 @@
             "splunk_hec": {"type": "integer", "minimum": 1, "maximum": 65535},
             "splunk_mgmt": {"type": "integer", "minimum": 1, "maximum": 65535},
             "cribl_edge_api": {"type": "integer", "minimum": 1, "maximum": 65535},
-            "cribl_stream_api": {"type": "integer", "minimum": 1, "maximum": 65535}
+            "cribl_stream_api": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "apt_cacher_ng": {"type": "integer", "minimum": 1, "maximum": 65535}
           },
           "required": ["haproxy_stats", "splunk_web", "splunk_hec", "splunk_mgmt", "cribl_edge_api", "cribl_stream_api"],
           "additionalProperties": false

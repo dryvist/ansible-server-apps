@@ -13,7 +13,7 @@ mssql_docker_sa_password: >-
      | mandatory('MSSQL_SA_PASSWORD environment variable must be set') }}
 
 # Sample databases to restore (all from Microsoft's official GitHub)
-mssql_docker_restore_samples: false
+mssql_docker_restore_samples: true
 mssql_docker_samples_base_url: >-
   https://github.com/Microsoft/sql-server-samples/releases/download
 mssql_docker_sample_databases:
