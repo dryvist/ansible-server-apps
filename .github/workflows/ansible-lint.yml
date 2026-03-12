@@ -16,14 +16,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - 'playbooks/**/*.yml'
-      - 'playbooks/**/*.yaml'
-      - 'roles/**/*.yml'
-      - 'roles/**/*.yaml'
-      - 'inventory/**'
-      - 'tests/**'
-      - '.ansible-lint'
 
 # Minimum required permissions for security (least privilege)
 permissions:

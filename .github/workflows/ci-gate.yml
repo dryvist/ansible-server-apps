@@ -1,0 +1,155 @@
+---
+# CI Gate - Conditional Required Checks
+# Solves: "Required checks that only run when relevant files change"
+#
+# Problem: GitHub branch protection blocks merge when path-filtered workflows don't run
+# Solution: Always run, detect changes, conditionally execute checks, aggregate with Merge Gate
+#
+# Branch Protection: Set ONLY "Merge Gate" as required check
+
+name: CI Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Change detection - identifies what files changed in the PR
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ansible: ${{ steps.filter.outputs.ansible }}
+      inventory: ${{ steps.filter.outputs.inventory }}
+      tests: ${{ steps.filter.outputs.tests }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ansible:
+              - 'playbooks/**/*.yml'
+              - 'playbooks/**/*.yaml'
+              - 'roles/**/*.yml'
+              - 'roles/**/*.yaml'
+              - '.ansible-lint'
+              - 'requirements.yml'
+            inventory:
+              - 'inventory/**'
+              - 'tests/inventory_load/**'
+            tests:
+              - 'tests/**'
+              - 'molecule.yml'
+
+  # Conditional checks - only run when relevant files changed
+  ansible-lint:
+    name: Ansible Lint
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true' || needs.changes.outputs.tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip && pip install ansible-lint ansible
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: ansible-lint
+
+  syntax-check:
+    name: Syntax Check
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true' || needs.changes.outputs.tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip && pip install ansible
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: |
+          for playbook in playbooks/**/*.{yml,yaml}; do
+            if [ -f "$playbook" ]; then
+              echo "Checking syntax: $playbook"
+              ansible-playbook "$playbook" --syntax-check
+            fi
+          done
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'false'
+
+  validate-inventory-schema:
+    name: Validate Inventory Schema
+    needs: changes
+    if: needs.changes.outputs.inventory == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip && pip install jsonschema
+      - run: python3 tests/inventory_load/validate_schema.py
+
+  verify-inventory-load:
+    name: Verify Inventory Load
+    needs: changes
+    if: needs.changes.outputs.inventory == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip && pip install ansible
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: cp tests/inventory_load/terraform_inventory.json inventory/terraform_inventory.json
+      - run: ansible-playbook tests/inventory_load/verify_inventory.yml -i inventory/hosts.yml -c local
+        env:
+          PROXMOX_VE_HOSTNAME: test-pve
+          PROXMOX_SSH_KEY_PATH: /dev/null
+          ANSIBLE_HOST_KEY_CHECKING: 'false'
+
+  molecule:
+    name: Molecule Tests
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: python -m pip install --upgrade pip && pip install 'molecule[docker]>=6.0.0' docker
+      - run: pip install ansible && ansible-galaxy collection install -r requirements.yml
+      - run: molecule test
+
+  # Merge Gate - aggregates all results, ONLY required check in branch protection
+  gate:
+    name: Merge Gate
+    needs: [changes, ansible-lint, syntax-check, validate-inventory-schema, verify-inventory-load, molecule]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: re-actors/alls-green@release/v1
+        with:
+          allowed-skips: |
+            ${{ needs.changes.outputs.ansible == 'false' &&
+              'Ansible Lint, Syntax Check' || '' }}
+            ${{ needs.changes.outputs.inventory == 'false' &&
+              'Validate Inventory Schema, Verify Inventory Load' || '' }}
+            ${{ needs.changes.outputs.tests == 'false' &&
+              'Molecule Tests' || '' }}
+          jobs: ${{ toJSON(needs) }}
