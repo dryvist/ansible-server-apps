@@ -28,23 +28,6 @@ def send_udp_syslog(host, port, message):
         sock.close()
 
 
-def send_tcp_syslog(host, port, message):
-    """Send a syslog message via TCP.
-
-    Args:
-        host: Target hostname or IP address.
-        port: Target TCP port number.
-        message: Syslog message string to send.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(10)
-    try:
-        sock.connect((host, port))
-        sock.sendall(message.encode("utf-8") + b"\n")
-    finally:
-        sock.close()
-
-
 def query_splunk(mgmt_url, user, password, search_str, timeout=120):
     """Execute a oneshot search against Splunk REST API.
 

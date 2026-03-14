@@ -80,7 +80,7 @@ haproxy_stats_port: 8404
 haproxy_stats_user: admin
 # NOTE: Use a strong password from Doppler secrets in production
 # This default is intentionally weak - override with vault lookup
-haproxy_stats_password: "{{ lookup('env', 'HAPROXY_STATS_PASSWORD') | default('CHANGEME') }}"
+haproxy_stats_password: "{{ lookup('env', 'HAPROXY_STATS_PASSWORD') }}"
 
 # Load balancing algorithm (used by both HAProxy and Nginx)
 haproxy_algorithm: roundrobin
