@@ -60,6 +60,7 @@ def cribl_edge_ips(terraform_inventory):
         info["ip"]
         for info in containers.values()
         if "edge" in info.get("tags", [])
+        and "cribl" in info.get("tags", [])
     ]
     if not ips:
         pytest.skip("No Cribl Edge LXC containers found in inventory")

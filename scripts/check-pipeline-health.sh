@@ -25,14 +25,14 @@ SPLUNK_HOST="${SPLUNK_HOST:-$(jq -r '.splunk_vm.splunk.ip // empty' "$INVENTORY_
 if [ -n "${CRIBL_EDGE_IPS:-}" ]; then
     IFS=' ' read -ra EDGE_IPS <<< "$CRIBL_EDGE_IPS"
 else
-    mapfile -t EDGE_IPS < <(jq -r '.containers | to_entries[] | select(.value.tags | index("edge")) | .value.ip' "$INVENTORY_FILE")
+    mapfile -t EDGE_IPS < <(jq -r '.containers | to_entries[] | select(.value.tags? | index("edge")) | .value.ip' "$INVENTORY_FILE")
 fi
 
 # Cribl Stream LXC IPs (space-separated, override with CRIBL_STREAM_IPS env var)
 if [ -n "${CRIBL_STREAM_IPS:-}" ]; then
     IFS=' ' read -ra STREAM_IPS <<< "$CRIBL_STREAM_IPS"
 else
-    mapfile -t STREAM_IPS < <(jq -r '.containers | to_entries[] | select(.value.tags | index("stream")) | .value.ip' "$INVENTORY_FILE")
+    mapfile -t STREAM_IPS < <(jq -r '.containers | to_entries[] | select(.value.tags? | index("stream")) | .value.ip' "$INVENTORY_FILE")
 fi
 
 for var_name in HAPROXY_HOST SPLUNK_HOST; do
