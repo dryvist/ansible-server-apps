@@ -1,0 +1,23 @@
+---
+# openbao_agent -- skeleton role; implementation in a follow-up PR.
+#
+# Will configure vault-agent on each consumer LXC. Uses the
+# `community.hashi_vault` collection for any direct API interactions
+# (OpenBao is Vault-API compatible). vault-agent itself runs as a
+# systemd service and renders EnvironmentFile snippets that consumer
+# units load via `EnvironmentFile=/run/openbao/<service>.env`.
+#
+# When implemented, this role will:
+#   - Install vault-agent (from upstream OpenBao binary or via Bao CLI)
+#   - Drop /etc/openbao/agent.hcl with auto-auth via AppRole
+#   - Drop systemd unit + tmpfiles.d for /run/openbao
+#   - Render per-service templates listed in openbao_agent_templates
+#   - Tie consumer roles to the bridge variable
+#     (<role>_secret_source == 'openbao')
+
+- name: Skeleton notice
+  ansible.builtin.debug:
+    msg: >-
+      openbao_agent role is a skeleton; implementation lands in a
+      follow-up PR (see roles/openbao_agent/README.md).
+  when: not (openbao_available | default(false))

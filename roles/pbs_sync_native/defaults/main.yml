@@ -1,0 +1,33 @@
+---
+# Defaults for pbs_sync_native role
+#
+# Configures Proxmox Backup Server (PBS) sync via the native
+# `proxmox-backup-manager` CLI. The community.proxmox PBS modules
+# remain vaporware in 2026, so this role wraps the CLI with explicit
+# `changed_when` guards driven by JSON output parsing.
+#
+# Skeleton -- implementation lands in a follow-up PR.
+
+# List of PBS remotes to register on this PBS instance.
+# Each item is a dict shaped like:
+#   - name: pbs-c
+#     host: pbs-c.example.local
+#     userid: sync@pbs!ring
+#     fingerprint: "ab:cd:ef:..."
+#     password_env: PBS_REMOTE_PBS_C_PASSWORD
+pbs_sync_native_remotes: []
+
+# List of sync jobs to register on this PBS instance.
+# Each item is a dict shaped like:
+#   - id: pull-from-pbs-c
+#     remote: pbs-c
+#     remote_store: ds-c
+#     store: ds-b
+#     schedule: "*-*-* 03:00"
+#     owner: sync@pbs!ring
+#     remove_vanished: true
+#     transfer_last: 30
+pbs_sync_native_jobs: []
+
+# Where to look up secret material (sops|openbao). Bridge variable.
+pbs_sync_native_secret_source: "{{ secret_source | default('sops') }}"

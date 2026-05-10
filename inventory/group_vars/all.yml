@@ -4,3 +4,26 @@
 # System
 ansible_become: true
 ansible_become_method: sudo
+
+# ---------------------------------------------------------------------------
+# Secrets bridge variables
+# ---------------------------------------------------------------------------
+#
+# `openbao_available` flips to true once `roles/openbao_lxc` has been
+# rolled out and `roles/openbao_agent` is reachable on consumer LXCs.
+# Until then, every role keeps reading from SOPS-decrypted env vars
+# (the `sops exec-env`-bridged path).
+#
+# Per-role override pattern:
+#   <role>_secret_source: sops    # default
+#   <role>_secret_source: openbao # flipped role-by-role, one PR at a time
+#
+# Each role checks `<role>_secret_source | default(secret_source)`
+# inside its tasks, e.g.
+#   when: cribl_edge_secret_source | default(secret_source) == 'openbao'
+#
+# This keeps the migration from SOPS to OpenBao reversible and
+# auditable. See docs/adr/0007-secrets-sops-then-openbao.md and
+# docs/adr/0008-bridge-variable-pattern.md.
+secret_source: sops
+openbao_available: false

@@ -1,291 +1,131 @@
-# Ansible Proxmox Apps
+# dryvist/ansible-server-apps
 
-Configure applications running on Proxmox VMs and containers.
+Ansible application deployments inside the dryvist Proxmox cluster
+(VMs and LXC containers).
 
-This repository manages application deployment and configuration on virtual
-machines and containers provisioned by Proxmox VE. For Proxmox infrastructure
-provisioning, see `terraform-proxmox`.
+VM and LXC provisioning lives in
+[`dryvist/tofu-proxmox-cluster`](https://github.com/dryvist/tofu-proxmox-cluster).
+Host-level Proxmox config (cluster init, ZFS, PBS LXC) lives in
+[`dryvist/ansible-proxmox-cluster`](https://github.com/dryvist/ansible-proxmox-cluster).
+Splunk Enterprise is owned by
+[`JacobPEvans/ansible-splunk`](https://github.com/JacobPEvans/ansible-splunk)
+and linked from this repo via docs only.
 
-## Purpose and Scope
+This repo was forked from
+[`JacobPEvans/ansible-proxmox-apps`](https://github.com/JacobPEvans/ansible-proxmox-apps)
+on 2026-05-10. See [`ATTRIBUTION.md`](ATTRIBUTION.md).
 
-Deploy and configure the following application stacks:
+## Ecosystem context
 
-- **Cribl Edge**: Syslog ingestion and log processing with persistent queue
-- **Cribl Stream**: Central processing node for log pipeline
-- **HAProxy**: Syslog load balancer distributing logs to Cribl Edge nodes
+```text
+dryvist/tofu-proxmox-cluster   <- provisions VMs + LXCs, emits ansible_inventory.json
+                |
+                v
+   dryvist/ansible-server-apps  <- THIS REPO: deploys apps inside those VMs/LXCs
+                |
+                v
+        JacobPEvans/ansible-splunk  <- Splunk Enterprise (downstream HEC consumer)
+```
 
-Cribl Edge, Cribl Stream, and HAProxy run natively on Proxmox LXC
-containers. Splunk runs on a Proxmox VM. All infrastructure is provisioned
-by `terraform-proxmox`. This repository handles application configuration
-only.
+Full diagram: [`docs/assets/ecosystem-context.svg`](docs/assets/ecosystem-context.svg)
 
-## Dependencies
+## What this repo deploys
 
-- **terraform-proxmox**: Provisions VMs and persistent storage
-- **Doppler**: Secrets management (API keys, passwords)
-- Ansible 2.12+
-- Python 3.12+
+- **Cribl Edge** -- native install on LXC, syslog ingestion
+- **Cribl Stream** -- native install on LXC, NetFlow/IPFIX ingestion
+- **Cribl Packs** -- pack assets on Cribl LXCs
+- **HAProxy** -- syslog/netflow VIP forwarding to Cribl LXCs
+- **Technitium DNS** -- internal DNS server
+- **apt-cacher-ng** -- APT package proxy
+- **Mailpit** -- SMTP relay + web UI
+- **ntfy** -- push notification server
+- **MinIO** -- S3-compatible object storage
+- **MSSQL** -- SQL Server in Docker on LXC
+- **GitHub Actions Runners** -- Docker Compose on docker-host VM
+- **Qdrant** -- vector database (Docker in LXC)
+- **LlamaIndex + Ollama** -- CPU-only embeddings on LXC
+- **systemd_restart_policy** -- cross-cutting hardening role
+
+### Skeleton roles (today) -- implementation in follow-up PRs
+
+- **openbao_lxc** -- self-hosted OpenBao in privileged LXC (Docker
+  Compose; vendor-only deployment)
+- **openbao_agent** -- vault-agent on each consumer LXC, renders
+  `EnvironmentFile` snippets for systemd services
+- **pbs_sync_native** -- Proxmox Backup Server sync via native
+  `proxmox-backup-manager` CLI
 
 ## Installation
 
 ```bash
-# Clone repository
-cd ~/git
-git clone <repo-url> ansible-proxmox-apps
-cd ansible-proxmox-apps
-
-# Activate Nix dev shell (provides ansible, ansible-lint, molecule, etc.)
-direnv allow    # one-time per worktree — auto-activates on cd
-
-# Install required collections
+git clone git@github.com:dryvist/ansible-server-apps.git
+cd ansible-server-apps
+direnv allow
 ansible-galaxy collection install -r requirements.yml
-
-# Configure Doppler
-doppler configure set project ansible-proxmox-apps
-doppler configure set config prd
 ```
 
-Set the required environment variables for Proxmox LXC connection:
+The Nix dev shell (sourced from
+`github:JacobPEvans/nix-devenv#ansible-apps` via `.envrc`) provides
+`ansible`, `ansible-lint`, `molecule`, `sops`, `age`, `python3` with
+the required Python deps, `jq`, `yq`, and `pre-commit`. There is no
+local `flake.nix` -- direnv fetches and caches the remote shell.
 
-```bash
-export PROXMOX_VE_HOSTNAME="<proxmox-host>"
-export PROXMOX_SSH_KEY_PATH="<path-to-ssh-key>"
-```
+Required environment material is loaded via `sops exec-env` from
+`secrets.enc.yaml` (template in `secrets.enc.yaml.example`).
 
 ## Usage
 
 ```bash
-# Deploy Cribl Edge (syslog processing on LXC containers)
-doppler run -- ansible-playbook \
-  -i inventory/hosts.yml playbooks/site.yml --tags cribl_edge
+# Sync inventory from the upstream OpenTofu output
+# (Manual today; auto-sync planned via dryvist/tofu-proxmox-cluster output hook)
 
-# Deploy Cribl Stream (netflow/IPFIX processing on LXC containers)
-doppler run -- ansible-playbook \
-  -i inventory/hosts.yml playbooks/site.yml --tags cribl_stream
+# Deploy all apps (SOPS-bridged secrets)
+sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/site.yml'
 
-# Deploy HAProxy (load balancer on LXC container)
-doppler run -- ansible-playbook \
-  -i inventory/hosts.yml playbooks/site.yml --tags haproxy
+# Deploy GitHub runners (Doppler exception for runner PAT)
+doppler run -p gh-workflow-tokens -c prd -- \
+  sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
+    --tags github_runner'
 
-# Deploy all applications
-doppler run -- ansible-playbook \
-  -i inventory/hosts.yml playbooks/site.yml
-```
+# Validate Cribl-side pipeline (Splunk validation lives in ansible-splunk)
+sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/validate-pipeline.yml'
 
-## Inventory
-
-Inventory is loaded dynamically from `terraform_inventory.json` via
-`inventory/load_terraform.yml`. IPs are derived from terraform state and
-accessed via `hostvars`. Port constants come from
-`terraform_data.constants` (defined in `terraform-proxmox`).
-
-To regenerate the inventory from terraform:
-
-```bash
-./scripts/sync-terraform-inventory.sh
-```
-
-## Port Assignments
-
-All port assignments are defined in `inventory/pipeline_constants.json`
-and merged into `terraform_data.constants`. See that file for current
-values. Do not hardcode ports in playbooks or roles.
-
-## Roles
-
-### cribl_edge
-
-Deploy Cribl Edge log processor with syslog listeners and Splunk HEC output.
-
-- Installs Cribl Edge from official package repository
-- Configures UDP/TCP syslog listeners (ports 1514-1518)
-- Configures Splunk HEC output
-- Mounts 100GB persistent queue disk at `/opt/cribl/data`
-
-See `roles/cribl_edge/README.md` for detailed configuration.
-
-### cribl_stream
-
-Deploy Cribl Stream as central processing node in the pipeline.
-
-- Installs Cribl Stream from official packages
-- Configures as processing node (not leader)
-- Mounts 100GB persistent queue disk at `/opt/cribl/data`
-
-See `roles/cribl_stream/README.md` for configuration options.
-
-### haproxy
-
-Production load balancer on a dedicated LXC container.
-
-- Installs HAProxy and Nginx Stream on the HAProxy LXC container
-- Forwards syslog traffic (TCP/UDP) to Cribl Edge LXC containers
-- Forwards netflow/IPFIX traffic (TCP/UDP) to Cribl Stream LXC containers
-- HAProxy stats dashboard available (port from `terraform_data.constants`)
-
-See `roles/haproxy/README.md` for details.
-
-### apt_cacher_ng
-
-APT package caching proxy to reduce bandwidth usage across containers and VMs.
-
-See `roles/apt_cacher_ng/README.md` for configuration.
-
-### cribl_docker_stack (testing/dev only)
-
-Deploy Cribl Stream and Cribl Edge as Docker containers on the docker-host
-VM. This role is for testing and development only. Production pipelines use
-the `cribl_edge` and `cribl_stream` roles on native LXC containers.
-
-### mailpit_docker
-
-Deploy Mailpit email testing container for local SMTP capture and inspection.
-
-### mssql_docker
-
-Deploy Microsoft SQL Server as a Docker container.
-
-### ntfy_docker
-
-Deploy ntfy push notification service as a Docker container.
-
-### technitium_dns
-
-Deploy Technitium DNS server container for local DNS resolution and blocking.
-
-## Architecture
-
-All production components run on LXC containers (Cribl Edge, Cribl Stream,
-HAProxy) or VMs (Splunk), provisioned by `terraform-proxmox`.
-
-```text
-┌──────────────────┐    ┌──────────────────┐
-│  Syslog Sources  │    │ NetFlow Sources   │
-└────────┬─────────┘    └────────┬─────────┘
-         │                       │
-    (UDP/TCP syslog)        (UDP IPFIX)
-         │                       │
-         ▼                       ▼
-┌────────────────────────────────────────┐
-│         HAProxy LXC                    │
-│         (Load Balancer)                │
-└───────┬────────────────────┬───────────┘
-        │                    │
-   (syslog)             (netflow)
-        │                    │
-        ▼                    ▼
-   ┌─────────┐         ┌──────────┐
-   │Cribl    │         │Cribl     │
-   │Edge LXCs│         │Stream    │
-   │(syslog) │         │LXCs     │
-   └────┬────┘         │(IPFIX)  │
-        │              └────┬─────┘
-        │                   │
-        └─────────┬─────────┘
-                  │
-            (Splunk HEC)
-                  │
-                  ▼
-           ┌──────────────┐
-           │    Splunk    │
-           │      VM      │
-           └──────────────┘
-```
-
-## File Layout
-
-```text
-ansible-proxmox-apps/
-├── README.md                    This file
-├── CLAUDE.md                    AI agent documentation
-├── ansible.cfg                  Ansible configuration
-├── requirements.yml             Ansible Galaxy dependencies
-├── .ansible-lint                Linting rules
-├── .gitignore                   Git ignore rules
-├── .pre-commit-config.yaml      Pre-commit hooks
-├── inventory/
-│   ├── hosts.yml                Dynamic inventory from env vars
-│   └── group_vars/
-│       └── all.yml              Global variables
-├── playbooks/
-│   └── site.yml                 Main playbook (all roles)
-└── roles/
-    ├── cribl_edge/
-    │   ├── README.md
-    │   ├── defaults/main.yml
-    │   ├── tasks/main.yml
-    │   ├── handlers/main.yml
-    │   └── templates/
-    ├── cribl_stream/
-    │   ├── README.md
-    │   ├── defaults/main.yml
-    │   ├── tasks/main.yml
-    │   ├── handlers/main.yml
-    │   └── templates/
-    └── haproxy/
-        ├── README.md
-        ├── defaults/main.yml
-        ├── tasks/main.yml
-        ├── handlers/main.yml
-        └── templates/
-            └── haproxy.cfg.j2
-```
-
-## Requirements
-
-See `requirements.yml` for Ansible Galaxy collection dependencies.
-
-Run the following to install:
-
-```bash
-ansible-galaxy collection install -r requirements.yml
-```
-
-## Linting
-
-Validate code quality with ansible-lint:
-
-```bash
+# Lint
 ansible-lint
 ```
 
-Fix common issues automatically:
+## Secrets
+
+SOPS+age at rest, decrypted via `sops exec-env` for runtime today.
+After the `openbao_lxc` and `openbao_agent` roles ship, runtime
+secret material moves to OpenBao via `vault-agent`. Per-role
+flip is gated by the `<role>_secret_source` + `openbao_available`
+bridge variables (default `secret_source: sops`).
+
+Doppler is retained ONLY for the `gh-workflow-tokens` project (runner
+PAT injection); see `CLAUDE.md`.
+
+## Documentation
+
+- [`CLAUDE.md`](CLAUDE.md) -- AI agent + operator reference
+- [`docs/adr/`](docs/adr/) -- architecture decision records
+- [`docs/assets/`](docs/assets/) -- Mermaid diagrams (`.mmd` + `.svg`)
+- [`ATTRIBUTION.md`](ATTRIBUTION.md) -- fork provenance
+
+## Dev environment
+
+Nix flake + direnv. Shell sourced from
+[`JacobPEvans/nix-devenv#ansible-apps`](https://github.com/JacobPEvans/nix-devenv).
+No local `flake.nix`.
 
 ```bash
-ansible-lint --fix
+direnv allow      # one-time per worktree
+ansible --version # provided by the dev shell
 ```
-
-## Development Environment
-
-This project uses [Nix flakes](https://wiki.nixos.org/wiki/Flakes) + [direnv](https://direnv.net/) for a reproducible dev environment.
-
-### Prerequisites
-
-- [Nix](https://nixos.org/download/) with flakes enabled
-- [direnv](https://direnv.net/docs/installation.html) with [nix-direnv](https://github.com/nix-community/nix-direnv)
-
-### Setup
-
-```sh
-cd ansible-proxmox-apps/main    # or any worktree
-direnv allow                    # one-time per worktree
-```
-
-### Tools provided
-
-- `ansible`, `ansible-lint`, `molecule` — configuration management
-- `sops`, `age` — secrets management
-- `python3` with paramiko, pyyaml, jinja2 — Ansible dependencies
-- `jq`, `yq`, `pre-commit` — utilities
-
-## Contributing
-
-1. Update inventories in `inventory/`
-2. Modify roles in `roles/*/`
-3. Test with `--check --diff` mode
-4. Validate with `ansible-lint`
-5. Run playbook to apply
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) for details.
+[MIT](LICENSE) (relicensed from the original Apache-2.0 fork).

@@ -1,0 +1,21 @@
+%% dryvist ecosystem context, with this repo highlighted.
+%% See docs/adr/0001-cluster-aware-roles-via-host-vars.md.
+flowchart LR
+  schemas["dryvist/homelab-schemas<br/>(inventory contract)"]
+  tofu["dryvist/tofu-proxmox-cluster<br/>(VMs + LXCs)"]
+  cluster["dryvist/ansible-proxmox-cluster<br/>(host config + cluster init)"]
+  apps["**dryvist/ansible-server-apps**<br/>(THIS REPO -- app deploys)"]
+  splunk["JacobPEvans/ansible-splunk<br/>(Splunk Enterprise)"]
+  ai["dryvist/nix-ai-server<br/>(server A, standalone)"]
+  pxe["dryvist/nix-pxe-bootstrap<br/>(netboot.xyz on Pi)"]
+
+  schemas -- "schema git source" --> tofu
+  schemas -- "schema git source" --> cluster
+  schemas -- "schema git source" --> apps
+  tofu -- "ansible_inventory.json" --> cluster
+  tofu -- "ansible_inventory.json" --> apps
+  apps -- "Cribl HEC output" --> splunk
+  pxe -.->|"installs PVE on B/C/D"| cluster
+
+  classDef this fill:#fde68a,stroke:#92400e,stroke-width:2px;
+  class apps this;

@@ -1,18 +1,24 @@
 ---
-# Logging Pipeline Validation Playbook
-# Validates connectivity, service health, and data flow across the pipeline
+# Logging Pipeline Validation Playbook (Cribl side only)
 #
-# Production pipeline uses native Cribl on LXC containers:
-#   - Cribl Edge (cribl_edge group): syslog processing
-#   - Cribl Stream (cribl_stream_group): netflow/IPFIX processing
-#   - HAProxy (haproxy_group): load balancing to Cribl LXCs
-#   - Splunk (splunk_vms): search head and indexer
+# Validates connectivity, service health, and that the pipeline up to
+# (but not through) Splunk HEC is healthy:
+#   - HAProxy (haproxy_group): config + ports + backends
+#   - Cribl Edge (cribl_edge): service + API + syslog ports
+#   - Cribl Stream (cribl_stream_group): service + API + NetFlow port
+#   - Cribl Edge metrics endpoint
+#   - Qdrant, LlamaIndex, Mailpit, ntfy, MSSQL, MinIO health
+#
+# The Splunk side -- whether events landed in the Splunk index --
+# is owned by JacobPEvans/ansible-splunk and validated there.
+# See docs/adr/0004-splunk-linkage-via-docs-only.md and
+# docs/adr/0010-splunk-parallel-hec-cutover.md.
 #
 # Usage:
-#   doppler run -- uv run ansible-playbook \
-#     -i inventory/hosts.yml playbooks/validate-pipeline.yml
+#   sops exec-env secrets.enc.yaml \
+#     'ansible-playbook -i inventory/hosts.yml playbooks/validate-pipeline.yml'
 
-- name: Import Terraform infrastructure inventory
+- name: Import infrastructure inventory
   import_playbook: ../inventory/load_terraform.yml
 
 - name: Validate HAProxy Load Balancer
@@ -103,7 +109,7 @@
     - name: Assert Cribl Edge service is running
       # `cribl boot-start enable` after `cribl mode-edge` creates the unit
       # as `cribl-edge.service`, not `cribl.service`. Must match the role
-      # default `cribl_edge_service_name: cribl-edge` (fixed in PR #175).
+      # default `cribl_edge_service_name: cribl-edge`.
       ansible.builtin.assert:
         that:
           - >-
@@ -255,211 +261,7 @@
           (auth token used: {{ (cribl_edge_api_token is defined and cribl_edge_api_token | length > 0) | string }})
           status: {{ cribl_metrics.status }}
 
-- name: E2E Data Pipeline Validation (Syslog via Cribl Edge)
-  hosts: cribl_edge[0]
-  become: true
-  gather_facts: true
-  tags:
-    - e2e
-    - data_validation
-
-  vars:
-    constants: "{{ hostvars['localhost']['terraform_data']['constants'] }}"
-    # Generate unique test event ID using epoch timestamp
-    e2e_test_event_id: "E2E_VALIDATION_{{ ansible_date_time.epoch }}"
-    # Splunk connection details (no hardcoded fallback)
-    splunk_host: "{{ hostvars['splunk']['ansible_host'] }}"
-    splunk_port: "{{ constants.service_ports.splunk_mgmt }}"
-    splunk_user: admin
-    # SPLUNK_PASSWORD must be set via Doppler
-    splunk_password: "{{ lookup('env', 'SPLUNK_PASSWORD') }}"
-
-  tasks:
-    - name: Verify SPLUNK_PASSWORD is set
-      ansible.builtin.assert:
-        that:
-          - splunk_password | length > 0
-        fail_msg: >-
-          SPLUNK_PASSWORD environment variable must be set.
-          Run with doppler run --
-        quiet: true
-
-    - name: Install netcat for syslog testing
-      ansible.builtin.apt:
-        name: netcat-openbsd
-        state: present
-        update_cache: true
-
-    - name: Send test syslog message through pipeline
-      ansible.builtin.shell:
-        cmd: |
-          set -o pipefail
-          echo "<14>{{ ansible_date_time.iso8601 }} ansible-e2e-test: \
-          {{ e2e_test_event_id }}" | \
-          nc -u -w1 localhost {{ constants.syslog_ports.unifi }}
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for event to propagate through pipeline
-      ansible.builtin.pause:
-        seconds: 10
-        prompt: >-
-          Waiting for test event to propagate through Cribl Edge to Splunk...
-
-    # Pipeline latency assertion: poll up to 120 seconds (retries: 12, delay: 10)
-    # The loop fails the play if the event does not appear within 120 seconds.
-    - name: Query Splunk for test event (pipeline latency assertion, 120s timeout)
-      ansible.builtin.uri:
-        url: >-
-          https://{{ splunk_host }}:{{ splunk_port
-          }}/services/search/jobs
-        method: POST
-        user: "{{ splunk_user }}"
-        password: "{{ splunk_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        body_format: form-urlencoded
-        body:
-          search: 'search index=* "{{ e2e_test_event_id }}" | head 1'
-          output_mode: json
-          exec_mode: oneshot
-      register: splunk_search_result
-      retries: 12
-      delay: 10
-      until: >-
-        splunk_search_result.status == 200 and
-        (splunk_search_result.json.results | default([]) | length > 0)
-      failed_when: >-
-        splunk_search_result.status != 200 or
-        (splunk_search_result.json.results | default([]) | length == 0)
-
-    - name: Query Splunk for test event in unifi index
-      ansible.builtin.uri:
-        url: >-
-          https://{{ splunk_host }}:{{ splunk_port
-          }}/services/search/jobs
-        method: POST
-        user: "{{ splunk_user }}"
-        password: "{{ splunk_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        body_format: form-urlencoded
-        body:
-          search: 'search index=unifi "{{ e2e_test_event_id }}" | head 1'
-          output_mode: json
-          exec_mode: oneshot
-      register: splunk_unifi_index_result
-      retries: 6
-      delay: 10
-      until: >-
-        splunk_unifi_index_result.status == 200 and
-        (splunk_unifi_index_result.json.results | default([]) | length > 0)
-      failed_when: >-
-        splunk_unifi_index_result.status != 200 or
-        (splunk_unifi_index_result.json.results | default([]) | length == 0)
-
-    - name: E2E Data Pipeline PASSED
-      ansible.builtin.debug:
-        msg: |
-          === E2E DATA PIPELINE VALIDATION PASSED ===
-          Test event sent via syslog port {{ constants.syslog_ports.unifi }}
-          Event ID: {{ e2e_test_event_id }}
-          Splunk host: {{ splunk_host }}
-          Search results (index=*): {{ splunk_search_result.json.results | length }} event(s) found
-          Search results (index=unifi): {{ splunk_unifi_index_result.json.results | length }} event(s) found
-          Full pipeline verified: Source -> Cribl Edge LXC -> Splunk HEC -> Splunk Index (unifi)
-
-- name: E2E Validation via HAProxy (full path)
-  hosts: cribl_edge[0]
-  become: true
-  gather_facts: true
-  tags:
-    - e2e
-    - haproxy
-    - data_validation
-
-  vars:
-    constants: "{{ hostvars['localhost']['terraform_data']['constants'] }}"
-    # Generate unique test event ID using epoch timestamp
-    e2e_test_event_id: "E2E_HAPROXY_{{ ansible_date_time.epoch }}"
-    # Splunk connection details (no hardcoded fallback)
-    splunk_host: "{{ hostvars['splunk']['ansible_host'] }}"
-    splunk_port: "{{ constants.service_ports.splunk_mgmt }}"
-    splunk_user: admin
-    # SPLUNK_PASSWORD must be set via Doppler
-    splunk_password: "{{ lookup('env', 'SPLUNK_PASSWORD') }}"
-
-  tasks:
-    - name: Verify SPLUNK_PASSWORD is set
-      ansible.builtin.assert:
-        that:
-          - splunk_password | length > 0
-        fail_msg: >-
-          SPLUNK_PASSWORD environment variable must be set.
-          Run with doppler run --
-        quiet: true
-
-    - name: Install netcat for syslog testing
-      ansible.builtin.apt:
-        name: netcat-openbsd
-        state: present
-        update_cache: true
-
-    - name: Send test syslog message through HAProxy
-      ansible.builtin.shell:
-        cmd: |
-          set -o pipefail
-          echo "<14>{{ ansible_date_time.iso8601 }} ansible-e2e-haproxy-test: \
-          {{ e2e_test_event_id }}" | \
-          nc -u -w1 {{ hostvars['haproxy']['container_ip'] }} {{ constants.syslog_ports.unifi }}
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for event to propagate through pipeline
-      ansible.builtin.pause:
-        seconds: 10
-        prompt: >-
-          Waiting for test event to propagate through HAProxy -> Cribl Edge -> Splunk...
-
-    # Pipeline latency assertion: poll up to 120 seconds (retries: 12, delay: 10)
-    # The loop fails the play if the event does not appear within 120 seconds.
-    - name: Query Splunk for HAProxy test event in unifi index (pipeline latency assertion, 120s timeout)
-      ansible.builtin.uri:
-        url: >-
-          https://{{ splunk_host }}:{{ splunk_port
-          }}/services/search/jobs
-        method: POST
-        user: "{{ splunk_user }}"
-        password: "{{ splunk_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        body_format: form-urlencoded
-        body:
-          search: 'search index=unifi "{{ e2e_test_event_id }}" | head 1'
-          output_mode: json
-          exec_mode: oneshot
-      register: splunk_haproxy_result
-      retries: 12
-      delay: 10
-      until: >-
-        splunk_haproxy_result.status == 200 and
-        (splunk_haproxy_result.json.results | default([]) | length > 0)
-      failed_when: >-
-        splunk_haproxy_result.status != 200 or
-        (splunk_haproxy_result.json.results | default([]) | length == 0)
-
-    - name: E2E HAProxy Data Pipeline PASSED
-      ansible.builtin.debug:
-        msg: |
-          === E2E HAPROXY PIPELINE VALIDATION PASSED ===
-          Test event sent via HAProxy VIP {{ hostvars['haproxy']['container_ip'] }}
-          Syslog port: {{ constants.syslog_ports.unifi }}
-          Event ID: {{ e2e_test_event_id }}
-          Splunk host: {{ splunk_host }}
-          Search results (index=unifi): {{ splunk_haproxy_result.json.results | length }} event(s) found
-          Full path verified: Source -> HAProxy -> Cribl Edge LXC -> Splunk HEC -> Splunk Index (unifi)
-
-- name: Validate NetFlow Port
+- name: Validate NetFlow Port Listener
   hosts: cribl_stream_group[0]
   become: true
   gather_facts: true
@@ -469,23 +271,8 @@
 
   vars:
     constants: "{{ hostvars['localhost']['terraform_data']['constants'] }}"
-    # Splunk connection details (no hardcoded fallback)
-    splunk_host: "{{ hostvars['splunk']['ansible_host'] }}"
-    splunk_port: "{{ constants.service_ports.splunk_mgmt }}"
-    splunk_user: admin
-    # SPLUNK_PASSWORD must be set via Doppler
-    splunk_password: "{{ lookup('env', 'SPLUNK_PASSWORD') }}"
 
   tasks:
-    - name: Verify SPLUNK_PASSWORD is set
-      ansible.builtin.assert:
-        that:
-          - splunk_password | length > 0
-        fail_msg: >-
-          SPLUNK_PASSWORD environment variable must be set.
-          Run with doppler run --
-        quiet: true
-
     - name: Check netflow UDP port is listening
       ansible.builtin.shell:
         cmd: |
@@ -496,107 +283,13 @@
       failed_when: netflow_port_check.rc != 0
       changed_when: false
 
-    - name: Generate unique sentinel port for NetFlow test correlation
-      ansible.builtin.set_fact:
-        netflow_sentinel_port: "{{ 40000 + (ansible_date_time.epoch | int % 25000) }}"
-
-    - name: Send minimal NetFlow v5 test packet
-      ansible.builtin.shell:
-        cmd: |
-          python3 -c "
-          import socket, struct, time
-
-          # NetFlow v5 header: version=5, count=1, uptime=0
-          # epoch, nanosec, flow_seq=1, engine=0, sampling=0
-          epoch = int(time.time())
-          header = struct.pack('!HHIIIIBBH',
-              5,       # version
-              1,       # count (1 flow record)
-              0,       # sys_uptime_ms
-              epoch,   # unix_secs
-              0,       # unix_nsecs
-              1,       # flow_sequence
-              0,       # engine_type + engine_id (packed as one byte each below)
-              0,       # engine_id
-              0        # sampling_interval
-          )
-
-          # NetFlow v5 flow record (48 bytes): minimal valid record
-          # Uses sentinel src_port for test correlation in Splunk
-          record = struct.pack('!IIIHHIIIIHHBBBBHHBBH',
-              0x0A000001,  # src_addr 10.0.0.1
-              0x0A000002,  # dst_addr 10.0.0.2
-              0,           # next_hop
-              0,           # snmp_input
-              0,           # snmp_output
-              1,           # packets
-              64,          # octets
-              0,           # first_switched
-              0,           # last_switched
-              {{ netflow_sentinel_port }},  # src_port (sentinel)
-              80,          # dst_port
-              0,           # pad1
-              6,           # tcp_flags
-              6,           # protocol (TCP)
-              0,           # tos
-              0,           # src_as
-              0,           # dst_as
-              0,           # src_mask
-              0,           # dst_mask
-              0            # pad2
-          )
-
-          sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-          sock.sendto(header + record, ('127.0.0.1', {{ constants.netflow_ports.unifi }}))
-          sock.close()
-          print('NetFlow v5 test packet sent with sentinel src_port={{ netflow_sentinel_port }}')
-          "
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Wait for NetFlow event to propagate through pipeline
-      ansible.builtin.pause:
-        seconds: 10
-        prompt: >-
-          Waiting for NetFlow test event to propagate through Cribl Stream to Splunk...
-
-    # Pipeline latency assertion: poll up to 120 seconds (retries: 12, delay: 10)
-    # The loop fails the play if the event does not appear within 120 seconds.
-    - name: Query Splunk for NetFlow event in network index (pipeline latency assertion, 120s timeout)
-      ansible.builtin.uri:
-        url: >-
-          https://{{ splunk_host }}:{{ splunk_port
-          }}/services/search/jobs
-        method: POST
-        user: "{{ splunk_user }}"
-        password: "{{ splunk_password }}"
-        force_basic_auth: true
-        validate_certs: false
-        body_format: form-urlencoded
-        body:
-          search: 'search index=network earliest=-5m src_port={{ netflow_sentinel_port }} | head 1'
-          output_mode: json
-          exec_mode: oneshot
-      register: splunk_netflow_result
-      retries: 12
-      delay: 10
-      until: >-
-        splunk_netflow_result.status == 200 and
-        (splunk_netflow_result.json.results | default([]) | length > 0)
-      failed_when: >-
-        splunk_netflow_result.status != 200 or
-        (splunk_netflow_result.json.results | default([]) | length == 0)
-
     - name: Display NetFlow validation result
       ansible.builtin.debug:
         msg: |
-          === NETFLOW VALIDATION PASSED ===
+          === NETFLOW PORT VALIDATION PASSED ===
           NetFlow port {{ constants.netflow_ports.unifi }} UDP is listening
           {{ netflow_port_check.stdout }}
-          NetFlow v5 test packet sent and event found in Splunk
-          Splunk host: {{ splunk_host }}
-          Search results (index=network): {{ splunk_netflow_result.json.results | length }} event(s) found
-          Full path verified: NetFlow source -> Cribl Stream LXC -> Splunk HEC -> Splunk Index (network)
+          (End-to-end Splunk index validation lives in JacobPEvans/ansible-splunk.)
 
 - name: Validate Qdrant Vector Database
   hosts: qdrant_group
@@ -607,9 +300,9 @@
     - validation
 
   tasks:
-    - name: Load terraform data for Qdrant validation
+    - name: Load inventory data for Qdrant validation
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
+        file: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
         name: terraform_data
       delegate_to: localhost
       run_once: true
@@ -677,9 +370,9 @@
     - validation
 
   tasks:
-    - name: Load terraform data for LlamaIndex validation
+    - name: Load inventory data for LlamaIndex validation
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
+        file: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
         name: terraform_data
       delegate_to: localhost
       run_once: true
@@ -751,9 +444,9 @@
     - validation
 
   tasks:
-    - name: Load terraform data for Mailpit validation
+    - name: Load inventory data for Mailpit validation
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
+        file: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
         name: terraform_data
       delegate_to: localhost
       run_once: true
@@ -821,9 +514,9 @@
     - validation
 
   tasks:
-    - name: Load terraform data for ntfy validation
+    - name: Load inventory data for ntfy validation
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
+        file: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
         name: terraform_data
       delegate_to: localhost
       run_once: true
@@ -903,8 +596,9 @@
       changed_when: false
       failed_when: "'mssql' not in mssql_container_check.stdout"
 
-    # Port 1433 is the standard SQL Server port. No terraform constant exists yet;
-    # this should move to constants.service_ports.mssql when terraform-proxmox defines it.
+    # Port 1433 is the standard SQL Server port. No constant exists yet;
+    # move to constants.service_ports.mssql when the upstream tofu module
+    # defines it.
     - name: Wait for MSSQL port 1433
       ansible.builtin.wait_for:
         host: 127.0.0.1
@@ -1023,12 +717,12 @@
       ansible.builtin.debug:
         msg: |
           ============================================
-          LOGGING PIPELINE VALIDATION COMPLETE
+          LOGGING PIPELINE VALIDATION COMPLETE (Cribl side)
           ============================================
           HAProxy:      Config valid, ports listening
           Cribl Edge:   LXC services healthy, APIs responding
           Cribl Stream: LXC services healthy, APIs responding
-          NetFlow:      Port listening + event in Splunk
+          NetFlow:      Port listening (Splunk index check in ansible-splunk)
           Cribl Edge:   Metrics API responding
           Qdrant:       Docker running, HTTP+gRPC healthy
           LlamaIndex:   Ollama running, model loaded, Qdrant reachable
@@ -1036,9 +730,6 @@
           ntfy:         Docker running, health endpoint healthy
           MSSQL:        Docker running, port 1433 listening
           MinIO:        Service, bucket, versioning, policy, lifecycle
-          E2E:          Data flowing through pipeline
-          E2E (unifi):  Event landed in index=unifi
-          E2E (HAProxy): Event via HAProxy in index=unifi
-          Latency:      Events appeared within 120s
           ============================================
-          Pipeline is ready for log ingestion!
+          Pipeline (Cribl side) ready for log ingestion.
+          End-to-end Splunk index validation: see ansible-splunk.

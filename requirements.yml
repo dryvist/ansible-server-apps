@@ -1,15 +1,32 @@
 ---
 # Ansible collections required for this repository
-# Note: ansible.builtin is not listed as it's included with ansible-core
+# Note: ansible.builtin is bundled with ansible-core
 collections:
   - name: ansible.posix
     version: ">=1.3.0"
 
   - name: community.general
-    version: ">=10.3.0"  # Required for proxmox_pct_remote connection plugin
+    version: ">=10.3.0"  # required for proxmox_pct_remote connection plugin
 
   - name: community.proxmox
-    version: ">=1.4.0"  # Better proxmox_pct_remote implementation
+    version: ">=1.4.0"  # better proxmox_pct_remote implementation
 
   - name: community.docker
     version: ">=3.6.0"  # docker_compose_v2 module added in 3.6.0
+
+  - name: ansible.utils
+    version: ">=6.0.0"  # provides ansible.utils.validate for inventory schema check
+
+  - name: community.crypto
+    version: ">=3.0.0"  # x509/cert helpers used by haproxy and openbao_lxc
+
+  - name: community.hashi_vault
+    version: ">=6.0.0"  # OpenBao is Vault-API compatible; used by openbao_agent
+
+# Inventory schema is sourced from dryvist/homelab-schemas. ansible-galaxy
+# does not natively pull arbitrary git repos as a "schema" dependency, so
+# the schema fetch is a CI step (see .github/workflows). The upstream pin
+# is documented here for humans:
+#   Pin:    https://github.com/dryvist/homelab-schemas/tree/main
+#   Schema: schemas/ansible-inventory-v1.json
+#   Tested against: tests/inventory_load/ansible_inventory.json

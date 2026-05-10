@@ -1,173 +1,164 @@
-# Ansible Proxmox Apps
+# Ansible Server Apps (dryvist)
 
-Configure applications on Proxmox VMs and LXC containers.
-VMs/containers are provisioned by `terraform-proxmox`;
-this repo handles app config only.
+@AGENTS.md
+
+Configure applications on Proxmox cluster VMs and LXC containers.
+VMs/containers are provisioned by `dryvist/tofu-proxmox-cluster`;
+this repo handles app config only. Splunk is owned by
+`JacobPEvans/ansible-splunk` and linked via docs only.
 
 ## This Repo Owns
 
-- **Cribl Edge** (`cribl_edge` role — native install on LXC containers)
-- **Cribl Stream** (`cribl_stream` role — native install on LXC containers)
+- **Cribl Edge** (`cribl_edge` role -- native install on LXC containers)
+- **Cribl Stream** (`cribl_stream` role -- native install on LXC containers)
+- **Cribl Packs** (`cribl_packs` role -- pack assets on Cribl LXCs)
 - **HAProxy** (LXC container, syslog/netflow VIP forwarding to Cribl LXCs)
 - **Technitium DNS** (LXC container)
 - **apt-cacher-ng** (LXC container)
 - **Mailpit** (LXC container, SMTP relay with web UI)
 - **ntfy** (LXC container, push notification server)
-- **GitHub Actions Runners** (`github_runner` role — Docker Compose on docker-host VM)
-- **Qdrant** (`qdrant_docker` role — Docker in LXC container)
-- **LlamaIndex** (`llamaindex` role — Python + Ollama CPU-only embeddings on LXC container)
+- **MinIO** (LXC container, S3-compatible object storage)
+- **MSSQL** (`mssql_docker` role -- SQL Server in Docker on LXC)
+- **GitHub Actions Runners** (`github_runner` role -- Docker Compose on docker-host VM)
+- **Qdrant** (`qdrant_docker` role -- Docker in LXC container)
+- **LlamaIndex** (`llamaindex` role -- Python + Ollama CPU-only embeddings on LXC)
+- **systemd_restart_policy** (cross-cutting role)
 
-**This repo does NOT own Splunk.** Splunk is managed by `ansible-splunk`.
+### Skeleton roles (implementation in follow-ups)
+
+- **openbao_lxc** -- self-hosted OpenBao in privileged LXC via Docker Compose
+- **openbao_agent** -- vault-agent on each consumer LXC (uses
+  `community.hashi_vault`; OpenBao is Vault-API compatible)
+- **pbs_sync_native** -- PBS Sync via native `proxmox-backup-manager`
+  CLI (community.proxmox PBS modules are vaporware)
+
+**This repo does NOT own Splunk.** Splunk migration uses parallel HEC
+(see `docs/adr/0010-splunk-parallel-hec-cutover.md`).
 
 ## Pipeline Data Flow
 
 ```text
-Source -> HAProxy LXC (175, TCP+UDP 514-518, 1514-1518, 2055)
+Source -> HAProxy LXC (TCP+UDP syslog + IPFIX 2055)
            |
-       Cribl Edge LXCs (180, 181) [syslog ports 1514-1518]
+       Cribl Edge LXCs [syslog ports]
          - Pipeline: sets index + sourcetype by port
-         - Output: Splunk HEC (https, port 8088)
+         - Output: Splunk HEC (https)
            |
-       Cribl Stream LXCs (182, 183) [IPFIX port 2055]
+       Cribl Stream LXCs [IPFIX 2055]
          - Pipeline: sets index=network, sourcetype=ipfix
-         - Output: Splunk HEC (https, port 8088)
+         - Output: Splunk HEC (https)
            |
-       Splunk Enterprise (200, managed by ansible-splunk)
+       Splunk Enterprise (managed by JacobPEvans/ansible-splunk)
 ```
 
-## Production vs Testing Environments
+## Cluster-aware Execution
 
-| Environment | Infrastructure | Purpose |
-| --- | --- | --- |
-| **Production** | LXC containers, Proxmox VMs | Real pipeline workflows, production data |
-| **Testing/Dev** | Docker Swarm on docker-host VM | Non-production experiments, Molecule tests |
-
-**Rule:** ALL production log/network pipelines flow through LXC containers.
-Docker Swarm on docker-host (250) is the non-production zone for development
-and testing only. High-volume network traffic must never flow through
-Docker's virtualized networking stack.
-
-### docker-host VM (250) — Workload Classes
-
-| Class | Services | Network | Ansible Tags |
-| --- | --- | --- | --- |
-| **CI (production)** | GitHub Actions runners | `ci_runners` bridge | `github_runner` |
-| **Dev/Test** | Cribl Docker Stack, mssql, etc. | Swarm overlay / default bridge | `cribl_docker_stack`, `mssql_docker` |
-
-These workload classes are isolated by Docker network and Compose project.
-CI runners MUST NOT share Docker networks with dev/test services.
-
-### Syslog Port Assignments (from terraform pipeline_constants)
-
-| Port | Source | Splunk Index |
-| --- | --- | --- |
-| 1514 | UniFi | unifi |
-| 1515 | Palo Alto | firewall |
-| 1516 | Cisco ASA | firewall |
-| 1517 | Linux | os |
-| 1518 | Windows | os |
-
-### NetFlow Port (from terraform pipeline_constants)
-
-| Port | Source | Splunk Index |
-| --- | --- | --- |
-| 2055 | UniFi IPFIX (UDP) | network |
-
-### Service Ports (from terraform pipeline_constants)
-
-| Port | Service |
-| --- | --- |
-| 8000 | Splunk Web UI |
-| 8088 | Splunk HEC (HTTPS) |
-| 8089 | Splunk Management |
-| 8404 | HAProxy Stats |
-| 9420 | Cribl Edge API |
-| 9000 | Cribl Stream API (also S3 API on `object-storage` LXC; `minio` LXC during 30-day soak) |
-| 9001 | object-storage Console (loopback only; `minio` Console during 30-day soak) |
-| 3142 | apt-cacher-ng |
-| 1025 | Mailpit SMTP |
-| 8025 | Mailpit Web UI |
-| 8080 | ntfy HTTP |
-| 6333 | Qdrant HTTP (from terraform `vector_db_ports`) |
-| 6334 | Qdrant gRPC (from terraform `vector_db_ports`) |
-
-Values are sourced from `terraform-proxmox/locals.tf`
-`pipeline_constants.{service_ports, netflow_ports, vector_db_ports}`.
-Do not hand-edit — fix the constant and refresh
-`inventory/terraform_inventory.json`.
+`playbooks/site.yml` sets `serial: 1` as the global default for plays
+that target the cluster (apps that exist as singletons on each node,
+or that need ordered upgrades). Per-role overrides are allowed via
+the role's `meta/main.yml`.
 
 ## Inventory
 
-Inventory is loaded dynamically from
-`terraform_inventory.json` via `load_terraform.yml`.
-Port constants come from `terraform_data.constants`
-(defined in terraform-proxmox `locals.tf`).
+Inventory is loaded dynamically from `inventory/ansible_inventory.json`
+(produced by `dryvist/tofu-proxmox-cluster`) via
+`inventory/load_terraform.yml`. The schema is pinned to
+`dryvist/homelab-schemas` through `requirements.yml`.
 
-### Groups (from terraform inventory)
+### Schema source-of-truth
+
+- Repo: <https://github.com/dryvist/homelab-schemas>
+- File: `schemas/ansible-inventory-v1.json`
+- Pinned via `requirements.yml` git source (currently `main`; will
+  flip to a tagged version when v1.0.0 ships).
+
+### Groups (from inventory)
 
 - `lxc_containers`: All LXC containers (`proxmox_pct_remote` connection)
 - `cribl_edge`: Cribl Edge LXC containers (syslog processing)
-- `cribl_stream_group`: Cribl Stream LXC containers (netflow/IPFIX processing)
-- `docker_vms` / `cribl_docker_group`: Docker Swarm hosts (SSH, testing/dev + CI runners)
-- `mailpit_group`: Containers tagged `smtp` (Mailpit SMTP relay)
-- `ntfy_group`: Containers tagged `push` (ntfy push notifications)
-- `qdrant_group`: Containers tagged `vectordb` (Qdrant vector database)
-- `llamaindex_group`: Containers tagged `rag` (LlamaIndex RAG engine)
-
-### Environment Variables
-
-| Variable | Purpose | Source |
-| --- | --- | --- |
-| `PROXMOX_VE_HOSTNAME` | Proxmox VE hostname | Doppler / SOPS |
-| `PROXMOX_VE_NODE` | Proxmox node name | SOPS |
-| `PROXMOX_VE_GATEWAY` | Network gateway (for IP derivation) | Doppler / SOPS |
-| `PROXMOX_DOMAIN` | Internal DNS domain | Doppler / SOPS |
-| `PROXMOX_SSH_KEY_PATH` | SSH key for Proxmox VE host and non-Docker VM access | Doppler / SOPS |
-| `PROXMOX_DKR_SSH_KEY_PATH` | SSH key for Docker VM direct access (docker-host) | Doppler / SOPS |
-| `SPLUNK_HEC_TOKEN` | Splunk HEC token (for Cribl output) | Doppler / SOPS |
-| `SPLUNK_PASSWORD` | Splunk admin password (for E2E validation) | Doppler / SOPS |
-| `HAPROXY_STATS_PASSWORD` | HAProxy stats page password | SOPS |
-| `TECHNITIUM_DNS_API_TOKEN` | Technitium DNS API token | Doppler |
-| `MAILPIT_RELAY_HOST` | SMTP relay hostname | SOPS |
-| `MAILPIT_RELAY_PORT` | SMTP relay port (default 587) | SOPS |
-| `MAILPIT_RELAY_USERNAME` | SMTP relay username | SOPS |
-| `MAILPIT_RELAY_PASSWORD` | SMTP relay password / app password | Doppler / SOPS |
-| `MSSQL_SA_PASSWORD` | SQL Server SA password (for mssql_docker role) | SOPS |
-| `GH_PAT_RUNNER_TOKEN` | Fine-grained PAT for runner auto-registration (multi-repo) | Doppler (`gh-workflow-tokens`) |
-| `SOPS_AGE_KEY` | Age private key content for SOPS decryption in runner containers | Doppler |
-| `GITHUB_RUNNER_TOKEN` | (deprecated) Single-repo registration token (1h expiry) | SOPS |
-| `QDRANT_API_KEY` | Qdrant vector database API key | SOPS |
+- `cribl_stream_group`: Cribl Stream LXC containers (netflow/IPFIX)
+- `docker_vms` / `cribl_docker_group`: Docker hosts (testing/dev + CI)
+- `mailpit_group`: Containers tagged `smtp`
+- `ntfy_group`: Containers tagged `push`
+- `qdrant_group`: Containers tagged `vectordb`
+- `llamaindex_group`: Containers tagged `rag`
+- `apt_cacher_group`: Containers tagged `apt-cache`
+- `minio_group`: Containers tagged `minio`
+- `technitium_dns_group`: Containers tagged `dns`
+- `mssql_group`: Containers tagged `database`
 
 ## Secrets Management
 
-**Runtime injection**: Doppler (`doppler run --`)
-**At-rest encryption**: SOPS + age (`secrets.enc.yaml`)
+**At-rest encryption**: SOPS + age (`secrets.enc.yaml`). Age key is
+backed up to Bitwarden vault.
 
-See the [SOPS integration rule](agentsmd/rules/infra/sops-integration.md)
-in ai-assistant-instructions for full patterns.
+**Runtime injection (today)**: `sops exec-env` exports decrypted
+values as environment variables before running ansible-playbook.
 
-Template: `secrets.enc.yaml.example` — copy, fill in real values, then encrypt.
+**Runtime injection (post-OpenBao)**: `vault-agent` (the
+`openbao_agent` role) renders `EnvironmentFile`-style snippets per
+consumer service. Roles flip from SOPS to OpenBao one PR at a time
+via the `<role>_secret_source` + `openbao_available` bridge variable
+pattern (default `secret_source: sops` until OpenBao is up).
+
+See `docs/adr/0007-secrets-sops-then-openbao.md` and
+`docs/adr/0008-bridge-variable-pattern.md`.
+
+### Doppler scope (intentional carve-out)
+
+Doppler is retained ONLY for the `gh-workflow-tokens` project, which
+provides `GH_PAT_RUNNER_TOKEN` for the `github_runner` role. All
+other runtime secrets flow through SOPS today and OpenBao tomorrow.
+
+```bash
+# github_runner is the ONE doppler-bridged role
+doppler run -p gh-workflow-tokens -c prd -- \
+  sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
+    --tags github_runner'
+```
+
+### Required environment variables (sourced from SOPS)
+
+| Variable | Purpose |
+| --- | --- |
+| `PROXMOX_VE_HOSTNAME` | Proxmox VE hostname |
+| `PROXMOX_VE_NODE` | Proxmox node name |
+| `PROXMOX_VE_GATEWAY` | Network gateway (for IP derivation) |
+| `PROXMOX_DOMAIN` | Internal DNS domain |
+| `PROXMOX_SSH_KEY_PATH` | SSH key for Proxmox host and non-Docker VMs |
+| `PROXMOX_DKR_SSH_KEY_PATH` | SSH key for Docker VM direct access |
+| `SPLUNK_HEC_TOKEN` | Splunk HEC token (for Cribl output) |
+| `SPLUNK_PASSWORD` | Splunk admin password (for E2E validation) |
+| `HAPROXY_STATS_PASSWORD` | HAProxy stats page password |
+| `TECHNITIUM_DNS_API_TOKEN` | Technitium DNS API token |
+| `MAILPIT_RELAY_HOST` | SMTP relay hostname |
+| `MAILPIT_RELAY_PORT` | SMTP relay port |
+| `MAILPIT_RELAY_USERNAME` | SMTP relay username |
+| `MAILPIT_RELAY_PASSWORD` | SMTP relay password |
+| `MSSQL_SA_PASSWORD` | SQL Server SA password |
+| `QDRANT_API_KEY` | Qdrant vector database API key |
+| `GH_PAT_RUNNER_TOKEN` | Runner registration PAT (Doppler exception) |
 
 ## Commands
 
 ```bash
-# Deploy all apps (Doppler — main pipeline does not require SOPS)
-doppler run -- ansible-playbook -i inventory/hosts.yml playbooks/site.yml
+# Deploy all apps (SOPS-bridged secrets)
+sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/site.yml'
 
-# Deploy all apps including SOPS-only roles (e.g., haproxy, mailpit)
-sops exec-env secrets.enc.yaml 'doppler run -- ansible-playbook \
-  -i inventory/hosts.yml playbooks/site.yml'
-
-# Deploy GitHub runners (requires token from gh-workflow-tokens Doppler project)
+# Deploy GitHub runners (Doppler exception for runner PAT)
 doppler run -p gh-workflow-tokens -c prd -- \
-  doppler run -- ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
-  --tags github_runner
+  sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
+    --tags github_runner'
 
 # Edit encrypted secrets
 sops secrets.enc.yaml
 
-# Validate pipeline
-doppler run -- ansible-playbook -i inventory/hosts.yml playbooks/validate-pipeline.yml
+# Validate pipeline (Cribl side only; Splunk validation lives in ansible-splunk)
+sops exec-env secrets.enc.yaml \
+  'ansible-playbook -i inventory/hosts.yml playbooks/validate-pipeline.yml'
 
 # Lint
 ansible-lint
@@ -175,75 +166,51 @@ ansible-lint
 
 ## Testing
 
-### Fast (CI + pre-commit — runs automatically)
+### Fast (CI + pre-commit)
 
-| Check | Command | When |
-| --- | --- | --- |
-| Ansible lint | `ansible-lint` | pre-commit, every PR |
-| Playbook syntax | `ansible-playbook --syntax-check` | every PR (CI) |
-| Inventory group validation | see below | every PR (CI) |
-| Molecule syntax | `molecule syntax` | every PR (CI, roles/molecule changes) |
-
-**Inventory validation locally:**
+| Check | Command |
+| --- | --- |
+| Ansible lint | `ansible-lint` |
+| Playbook syntax | `ansible-playbook --syntax-check` |
+| Inventory schema validation | via `ansible.utils.validate` |
+| Molecule syntax | `molecule syntax` |
 
 ```bash
-cp tests/inventory_load/terraform_inventory.json inventory/terraform_inventory.json
+cp tests/inventory_load/ansible_inventory.json inventory/ansible_inventory.json
 ansible-playbook tests/inventory_load/verify_inventory.yml \
   -i inventory/hosts.yml -c local
 ```
 
-### Extended (manual — run before merging role changes)
-
-Full Molecule test deploys the `mssql_docker` role in a Docker container,
-starts SQL Server, and verifies port 1433 is accepting connections.
-Requires Docker on the local machine (~5-10 min).
+### Extended (manual)
 
 ```bash
-# Install Ansible Galaxy dependencies (once)
 ansible-galaxy collection install -r requirements.yml
-
-# Run full test cycle (create -> converge -> idempotence -> verify -> destroy)
 molecule test
-
-# Or step through individually for debugging
-molecule converge   # deploy role into container
-molecule verify     # run assertions
-molecule destroy    # clean up
 ```
-
-**When to run:** Any time you modify a role in `roles/` before opening a PR.
 
 ## Dev Environment
 
-This repo uses [Nix flakes](https://wiki.nixos.org/wiki/Flakes) + [direnv](https://direnv.net/) for a reproducible dev environment.
-
-### Activation
+Nix flakes + direnv:
 
 ```sh
-direnv allow    # one-time per worktree — auto-activates on cd
+direnv allow    # one-time per worktree
 ```
 
-The shell is provided by the `ansible-apps` shell in
-[nix-devenv](https://github.com/JacobPEvans/nix-devenv) via `.envrc`.
-There is no local `flake.nix` — direnv fetches and caches the remote shell automatically.
+Shell is provided by the `ansible-apps` shell in
+[`JacobPEvans/nix-devenv`](https://github.com/JacobPEvans/nix-devenv)
+via `.envrc`. There is no local `flake.nix`.
 
-To activate manually without direnv:
+To activate manually:
 
 ```sh
 nix develop "github:JacobPEvans/nix-devenv#ansible-apps"
 ```
 
-### Tools provided
-
-- ansible, ansible-lint, molecule — configuration management
-- sops, age — secrets management
-- python3 with paramiko, pyyaml, jinja2, jsondiff — Ansible dependencies
-- jq, yq, pre-commit — utilities
-
 ## Related Repositories
 
 | Repo | Relationship |
 | --- | --- |
-| terraform-proxmox | Upstream: provisions VMs/containers |
-| ansible-splunk | Peer: owns Splunk Enterprise deployment |
-| ansible-proxmox | Peer: owns Proxmox host config (kernel, ZFS, firewall) |
+| `dryvist/tofu-proxmox-cluster` | Upstream: provisions VMs/LXCs |
+| `dryvist/ansible-proxmox-cluster` | Peer: Proxmox host-level config |
+| `dryvist/homelab-schemas` | Schema source-of-truth (inventory contract) |
+| `JacobPEvans/ansible-splunk` | Splunk Enterprise (linked via docs only) |
