@@ -111,7 +111,9 @@ jobs:
           ansible-galaxy collection install -r requirements.yml
 
       - name: Copy inventory fixture for CI
-        run: cp tests/inventory_load/terraform_inventory.json inventory/terraform_inventory.json
+        run: cp tests/inventory_load/ansible_inventory.json inventory/ansible_inventory.json
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'false'
 
       - name: Verify inventory loads and groups are assigned correctly
         run: >-

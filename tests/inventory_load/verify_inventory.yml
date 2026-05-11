@@ -4,7 +4,7 @@
 # from Terraform inventory tags.
 #
 # Usage (CI - uses fixture):
-#   cp tests/inventory_load/terraform_inventory.json inventory/terraform_inventory.json
+#   cp tests/inventory_load/ansible_inventory.json inventory/ansible_inventory.json
 #   ansible-playbook tests/inventory_load/verify_inventory.yml \
 #     -i inventory/hosts.yml -c local
 #
