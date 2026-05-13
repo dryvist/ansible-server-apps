@@ -1,0 +1,31 @@
+---
+# Defaults for openbao_lxc role
+#
+# Deploys self-hosted OpenBao in a privileged LXC via Docker Compose
+# (vendor-only deployment). Skeleton -- implementation in follow-up PR.
+
+# Proxmox guest ID for the OpenBao LXC.
+# Source: dryvist/tofu-proxmox-cluster outputs (host group `openbao_lxc`).
+openbao_lxc_id: 0
+
+# ZFS dataset / Proxmox storage pool used for the OpenBao data volume.
+openbao_lxc_datastore: local-zfs
+
+# Path on the LXC host where OpenBao's data volume is bind-mounted.
+openbao_lxc_data_path: /var/lib/openbao
+
+# Path inside the LXC where the age-encrypted Shamir share bundle for
+# auto-unseal will be mounted (read-only).
+openbao_lxc_unseal_key_path: /etc/openbao/unseal-shares.age
+
+# Operator email used for cert request UCN and internal notifications.
+openbao_lxc_admin_email: ops@example.local
+
+# OpenBao container image (placeholder pin -- bumped via Renovate).
+openbao_lxc_image: openbao/openbao:latest
+
+# OpenBao API listen port (Vault-compatible default).
+openbao_lxc_api_port: 8200
+
+# OpenBao cluster port (used for HA replication once a second node lands).
+openbao_lxc_cluster_port: 8201

@@ -1,12 +1,17 @@
 ---
-# Pre-playbook that loads Terraform infrastructure data dynamically
-# This playbook runs first to populate the Ansible inventory from Terraform outputs,
-# eliminating hardcoded VM IDs and IPs from Ansible configuration.
+# Pre-playbook that loads infrastructure inventory dynamically.
 #
-# It expects terraform_inventory.json to be present (generated via:
-# terragrunt output -json ansible_inventory > inventory/terraform_inventory.json)
+# Populates the Ansible inventory from the OpenTofu output emitted by
+# `dryvist/tofu-proxmox-cluster`. The in-memory variable name
+# `terraform_data` is preserved for backwards-compat with the 17
+# inherited roles; the on-disk filename is `ansible_inventory.json`
+# per the dryvist/homelab-schemas contract.
+#
+# Generate via (from dryvist/tofu-proxmox-cluster/environments/homelab):
+#   terragrunt output -json ansible_inventory > \
+#     ~/git/dryvist/ansible-server-apps/main/inventory/ansible_inventory.json
 
-- name: Load Terraform Infrastructure Inventory
+- name: Load Infrastructure Inventory
   hosts: localhost
   become: false
   gather_facts: false
@@ -17,29 +22,29 @@
     ansible_become: false
 
   tasks:
-    - name: Verify terraform inventory exists
+    - name: Verify ansible inventory file exists
       ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
-      register: terraform_inventory_check
+        path: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
+      register: ansible_inventory_check
 
-    - name: Fail if terraform inventory is missing
+    - name: Fail if ansible inventory file is missing
       ansible.builtin.fail:
         msg: |
-          terraform_inventory.json not found!
+          inventory/ansible_inventory.json not found.
 
-          Generate it by running from terraform-proxmox:
+          Generate it from dryvist/tofu-proxmox-cluster:
             terragrunt output -json ansible_inventory > \
-              ~/git/ansible-proxmox-apps/main/inventory/terraform_inventory.json
+              ~/git/dryvist/ansible-server-apps/main/inventory/ansible_inventory.json
 
-          Or sync from existing deployment.
-      when: not terraform_inventory_check.stat.exists
+          Or sync from an existing deployment.
+      when: not ansible_inventory_check.stat.exists
 
-    - name: Load Terraform inventory JSON
+    - name: Load inventory JSON
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../inventory/terraform_inventory.json"
+        file: "{{ playbook_dir }}/../inventory/ansible_inventory.json"
         name: terraform_data
 
-    - name: Validate terraform_data constants structure
+    - name: Validate inventory constants structure
       ansible.builtin.assert:
         that:
           - terraform_data is defined
@@ -47,16 +52,15 @@
           - terraform_data.constants.service_ports is defined
           - terraform_data.constants.syslog_ports is defined
         fail_msg: |
-          terraform_data.constants is missing or incomplete in terraform_inventory.json.
+          ansible_inventory.json is missing the constants block.
 
-          Expected terraform_inventory.json (generated from Terraform outputs) to include:
+          Expected:
             - terraform_data.constants.service_ports
             - terraform_data.constants.syslog_ports
 
-          Please ensure Terraform outputs (including pipeline_constants) are correctly
-          generated and merged into ansible_inventory, e.g. by re-running:
+          Re-run the upstream tofu output:
             terragrunt output -json ansible_inventory > \
-              ~/git/ansible-proxmox-apps/main/inventory/terraform_inventory.json
+              inventory/ansible_inventory.json
 
     - name: Validate Docker VM SSH key path is set when Docker VMs are present
       ansible.builtin.assert:
@@ -65,7 +69,7 @@
         fail_msg: |
           PROXMOX_DKR_SSH_KEY_PATH environment variable is not set but Docker VM hosts exist.
           Docker VMs use direct SSH with a dedicated key separate from the Proxmox host key.
-          Store it in Doppler (iac-conf-mgmt/prd) or SOPS (secrets.enc.yaml).
+          Store it in SOPS (secrets.enc.yaml).
       when:
         - terraform_data.docker_vms is defined
         - terraform_data.docker_vms | length > 0

@@ -1,0 +1,29 @@
+---
+# pbs_sync_native -- skeleton role; implementation in a follow-up PR.
+#
+# Will configure PBS Sync via the native `proxmox-backup-manager` CLI:
+#   proxmox-backup-manager remote create|list --output-format json
+#   proxmox-backup-manager sync-job create|list --output-format json
+#
+# `community.proxmox.proxmox_backup_remote` and `proxmox_backup_sync`
+# are vaporware in 2026 -- the modules don't exist. This role wraps
+# the CLI via `ansible.builtin.command` with explicit `changed_when`
+# guards based on JSON parsing of `--output-format json` output, so
+# idempotence is structural rather than guess-and-check.
+#
+# When implemented, this role will:
+#   - List existing remotes; create only those missing
+#   - List existing sync-jobs; create only those missing
+#   - Update any remote/job whose desired-state diff is non-empty
+#   - Trigger an immediate sync run if `pbs_sync_native_force_run`
+#   - Surface skipped/failed items to ntfy via the
+#     drift-check workflow
+
+- name: Skeleton notice
+  ansible.builtin.debug:
+    msg: >-
+      pbs_sync_native role is a skeleton; implementation lands in a
+      follow-up PR (see roles/pbs_sync_native/README.md).
+  when:
+    - pbs_sync_native_remotes | length == 0
+    - pbs_sync_native_jobs | length == 0

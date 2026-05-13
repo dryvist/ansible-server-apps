@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: openbao_lxc
+  author: dryvist
+  description: >-
+    Deploy self-hosted OpenBao in a privileged LXC via Docker Compose.
+    Skeleton -- implementation lands in a follow-up PR.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+  galaxy_tags:
+    - secrets
+    - vault
+    - openbao
+    - proxmox
+
+dependencies: []

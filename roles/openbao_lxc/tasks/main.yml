@@ -1,0 +1,24 @@
+---
+# openbao_lxc -- skeleton role; implementation in a follow-up PR.
+#
+# Will deploy self-hosted OpenBao in a privileged LXC via Docker
+# Compose (OpenBao is vendor-only Docker, hence privileged + nesting
+# + keyctl + fuse on the LXC). Manual unseal initially; auto-unseal
+# via age-encrypted Shamir shares stored in SOPS planned for follow-up.
+#
+# When implemented, this role will:
+#   - Render docker-compose.yml from a Jinja template
+#   - Bind-mount the OpenBao data dir from a ZFS dataset
+#   - Configure file storage backend (Raft once a second node lands)
+#   - Open firewall for openbao_api_port (and openbao_cluster_port)
+#   - Run `docker compose up -d` via community.docker.docker_compose_v2
+#   - Wait for the OpenBao API to come up and report sealed status
+#   - Optionally run the age-decrypt-and-unseal handler if
+#     `openbao_lxc_auto_unseal: true` is set
+
+- name: Skeleton notice
+  ansible.builtin.debug:
+    msg: >-
+      openbao_lxc role is a skeleton; implementation lands in a
+      follow-up PR (see roles/openbao_lxc/README.md).
+  when: openbao_lxc_id | default(0) | int == 0

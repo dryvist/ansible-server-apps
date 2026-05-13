@@ -1,11 +1,20 @@
 ---
-# Import Terraform infrastructure data before running application playbooks
-# This populates the inventory dynamically from terraform_inventory.json
-# Must run with gather_facts: false to avoid Gathering Facts task
-- name: Load Terraform infrastructure inventory
+# Import infrastructure inventory before running application playbooks.
+# Populates inventory dynamically from inventory/ansible_inventory.json.
+# Must run with gather_facts: false to avoid Gathering Facts task.
+- name: Load infrastructure inventory
   import_playbook: ../inventory/load_terraform.yml
 
-# Configure application stacks based on Terraform infrastructure
+# Cluster-aware execution
+# -----------------------
+# `serial: 1` is the global default for plays that target the
+# (future) 3-node Proxmox cluster, so node-by-node rollout is the
+# default rather than a special case. Per-role overrides are allowed
+# either with a play-level `serial:` override or via group_vars.
+#
+# Today this is mostly belt-and-braces: most roles target singletons
+# (e.g. one HAProxy LXC, one Mailpit LXC). It becomes load-bearing
+# when the same app gets rolled out across all 3 cluster nodes.
 
 # =============================================================================
 # Phase 0: APT Cache Infrastructure
@@ -16,6 +25,7 @@
   hosts: apt_cacher_group
   become: true
   gather_facts: true
+  serial: 1
   tags:
     - apt_cacher_ng
     - apt_proxy
@@ -72,7 +82,8 @@
 
 # =============================================================================
 # Phase 1a: DNS Installation
-# Install Technitium DNS server and bootstrap credentials from Doppler.
+# Install Technitium DNS server and bootstrap credentials from SOPS
+# (or OpenBao once `openbao_available: true`).
 # Must run BEFORE record management (Phase 1b).
 # =============================================================================
 
@@ -126,6 +137,7 @@
   hosts: cribl_edge
   become: true
   gather_facts: true
+  serial: 1
   tags:
     - cribl_edge
     - cribl
@@ -143,6 +155,7 @@
   hosts: cribl_stream_group
   become: true
   gather_facts: true
+  serial: 1
   tags:
     - cribl_stream
     - cribl
@@ -179,6 +192,7 @@
   hosts: haproxy_group
   become: true
   gather_facts: false
+  serial: 1
   tags:
     - haproxy
     - loadbalancer

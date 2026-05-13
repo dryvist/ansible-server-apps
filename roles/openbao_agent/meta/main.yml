@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  role_name: openbao_agent
+  author: dryvist
+  description: >-
+    Configure vault-agent on each consumer LXC, fetching secrets from
+    OpenBao and rendering EnvironmentFile snippets for systemd
+    services. Skeleton -- implementation lands in a follow-up PR.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+  galaxy_tags:
+    - secrets
+    - vault
+    - openbao
+    - systemd
+
+dependencies: []

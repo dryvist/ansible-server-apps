@@ -1,0 +1,25 @@
+---
+# Defaults for openbao_agent role
+#
+# Configures vault-agent on each consumer LXC, fetching secrets from
+# OpenBao and rendering EnvironmentFile-style snippets for systemd
+# services. Skeleton -- implementation lands in a follow-up PR.
+
+# OpenBao API endpoint (Vault-API compatible).
+# Source: dryvist/tofu-proxmox-cluster outputs.openbao_endpoint
+openbao_agent_server_addr: "https://openbao.example.local:8200"
+
+# Path to AppRole role-id file (deployed at host bootstrap; not a secret).
+openbao_agent_role_id_path: /etc/openbao/role-id
+
+# Path to AppRole secret-id file (response-wrapped on first delivery,
+# unwrapped + persisted by vault-agent).
+openbao_agent_secret_id_path: /etc/openbao/secret-id
+
+# Path where vault-agent renders the per-service EnvironmentFile.
+# Consumed by systemd units via `EnvironmentFile=`.
+openbao_agent_env_output_dir: /run/openbao
+
+# How long vault-agent should wait between template renders.
+openbao_agent_template_min_backoff: 5s
+openbao_agent_template_max_backoff: 60s
